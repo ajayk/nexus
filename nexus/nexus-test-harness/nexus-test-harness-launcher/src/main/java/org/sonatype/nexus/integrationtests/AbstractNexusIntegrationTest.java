@@ -87,11 +87,8 @@ import com.google.common.io.Closeables;
 import com.thoughtworks.xstream.XStream;
 
 /**
- * curl --user admin:admin123 --request PUT http://localhost:8081/nexus/service/local/status/command --data START NOTE,
- * this class is not really abstract so I can work around a the <code>@BeforeClass</code>, <code>@AfterClass</code>
- * issues, this should be refactored a little, but it might be ok, if we switch to TestNg
+ * curl --user admin:admin123 --request PUT http://localhost:8081/nexus/service/local/status/command --data START
  */
-// @RunWith(ConsoleLoggingRunner.class)
 public abstract class AbstractNexusIntegrationTest
 {
 
@@ -108,8 +105,6 @@ public abstract class AbstractNexusIntegrationTest
     public static final String REPO_RELEASE_PROXY_REPO1 = "release-proxy-repo-1";
 
     public static final String REPO_TEST_HARNESS_SHADOW = "nexus-test-harness-shadow";
-
-    protected static boolean NEEDS_INIT = false;
 
     public static final String REPOSITORY_RELATIVE_URL = "content/repositories/";
 
@@ -307,77 +302,51 @@ public abstract class AbstractNexusIntegrationTest
     // == Test "lifecycle" (@Before/@After...)
 
     @BeforeClass( alwaysRun = true )
-    public static void staticOncePerClassSetUp()
-        throws Exception
-    {
-        startProfiler();
-
-        // hacky state machine
-        NEEDS_INIT = true;
-    }
-
-    /**
-     * To me this seems like a bad hack around this problem. I don't have any other thoughts though. <BR/>
-     * If you see this and think: "Wow, why did he to that instead of XYZ, please let me know." <BR/>
-     * The issue is that we want to init the tests once (to start/stop the app) and the <code>@BeforeClass</code> is
-     * static, so we don't have access to the package name of the running tests. We are going to use the package name to
-     * find resources for additional setup. NOTE: With this setup running multiple Test at the same time is not
-     * possible.
-     *
-     * @throws Exception
-     */
-    @BeforeMethod( alwaysRun = true )
     public void oncePerClassSetUp()
         throws Exception
     {
         synchronized ( AbstractNexusIntegrationTest.class )
         {
-            if ( NEEDS_INIT )
+            // this will trigger PlexusContainer creation when test is instantiated, but only if needed
+            getITPlexusContainer( getClass() );
+
+            // tell the console what we are doing, now that there is no output its
+            String logMessage = "Running Test: " + getTestId() + " - Class: " + this.getClass().getSimpleName();
+            staticLog.info( String.format( "%1$-" + logMessage.length() + "s", " " ).replaceAll( " ", "*" ) );
+            staticLog.info( logMessage );
+            staticLog.info( String.format( "%1$-" + logMessage.length() + "s", " " ).replaceAll( " ", "*" ) );
+
+            // clean common work dir
+            beforeStartClean();
+
+            copyTestResources();
+
+            this.copyConfigFiles();
+
+            // TODO: Below, Nexus configuration upgrade happens! But this is insane, since it is the IT that
+            // upgrades
+            // nexus config, not the tested product! If, by any chance, we start to test another product, that is
+            // not in this buildtree (hence, the configuration classes will not be equal like currently), this is
+            // make hell loose!
+
+            // we need to make sure the config is valid, so we don't need to hunt through log files
+            if ( this.verifyNexusConfigBeforeStart )
             {
-                // this will trigger PlexusContainer creation when test is instantiated, but only if needed
-                getITPlexusContainer( getClass() );
-
-                // tell the console what we are doing, now that there is no output its
-                String logMessage = "Running Test: " + getTestId() + " - Class: " + this.getClass().getSimpleName();
-                staticLog.info( String.format( "%1$-" + logMessage.length() + "s", " " ).replaceAll( " ", "*" ) );
-                staticLog.info( logMessage );
-                staticLog.info( String.format( "%1$-" + logMessage.length() + "s", " " ).replaceAll( " ", "*" ) );
-
-                // clean common work dir
-                beforeStartClean();
-
-                copyTestResources();
-
-                this.copyConfigFiles();
-
-                // TODO: Below, Nexus configuration upgrade happens! But this is insane, since it is the IT that
-                // upgrades
-                // nexus config, not the tested product! If, by any chance, we start to test another product, that is
-                // not in this buildtree (hence, the configuration classes will not be equal like currently), this is
-                // make hell loose!
-
-                // we need to make sure the config is valid, so we don't need to hunt through log files
-                if ( this.verifyNexusConfigBeforeStart )
-                {
-                    getNexusConfigUtil().validateConfig();
-                }
-
-                // the validation needs to happen before we enable security it triggers an upgrade.
-                getNexusConfigUtil().enableSecurity(
-                    TestContainer.getInstance().getTestContext().isSecureTest()
-                        || Boolean.valueOf( System.getProperty( "secure.test" ) ) );
-
-                // start nexus
-                startNexus();
-
-                // deploy artifacts
-                deployArtifacts();
-
-                runOnce();
-
-                // TODO: we can remove this now that we have the soft restart
-                NEEDS_INIT = false;
+                getNexusConfigUtil().validateConfig();
             }
+
+            // the validation needs to happen before we enable security it triggers an upgrade.
+            getNexusConfigUtil().enableSecurity(
+                TestContainer.getInstance().getTestContext().isSecureTest()
+                    || Boolean.valueOf( System.getProperty( "secure.test" ) ) );
+
+            // start nexus
+            startNexus();
+
+            // deploy artifacts
+            deployArtifacts();
+
+            runOnce();
 
             getEventInspectorsUtil().waitForCalmPeriod();
         }
